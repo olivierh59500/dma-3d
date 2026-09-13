@@ -1,6 +1,5 @@
-
-// Glenz Vectors Demo - Go/Ebiten/ym-player demo
-package main
+// Package dma3d implements the Glenz vector demo.
+package dma3d
 
 import (
 	"bytes"
@@ -18,15 +17,15 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/olivierh59500/ym-player/pkg/stsound"
+
+	demolayout "dma-3d/internal/layout"
 )
 
 const (
-	screenWidth   = 640
-	screenHeight  = 480
+	screenWidth   = demolayout.SceneWidth
+	screenHeight  = demolayout.SceneHeight
 	sampleRate    = 44100
-	fontCharWidth = 32
-	fontCharHeight= 32
-	waveIncrement = 0.2
+	pcmFrameBytes = 4 // 16-bit little-endian stereo
 )
 
 var (
@@ -40,28 +39,23 @@ type Vector3 struct{ X, Y, Z float64 }
 type Triangle struct {
 	V1, V2, V3 int
 	Color      color.Color
-	Alpha      float32
 }
 type TriangleWithDepth struct {
 	Triangle
 	Depth float64
 }
 type Star struct {
-	X, Y     float64
-	Speed    float64
-	Color    color.Color
-	Size     float64
+	X, Y  float64
+	Speed float64
+	Color color.Color
+	Size  float64
 }
 
 type YMPlayer struct {
-	player       *stsound.StSound
-	sampleRate   int
-	buffer       []int16
-	mutex        sync.Mutex
-	position     int64
-	totalSamples int64
-	loop         bool
-	volume       float64
+	player *stsound.StSound
+	buffer []int16
+	mutex  sync.Mutex
+	loop   bool
 }
 
 func NewYMPlayer(data []byte, sampleRate int, loop bool) (*YMPlayer, error) {
@@ -71,23 +65,25 @@ func NewYMPlayer(data []byte, sampleRate int, loop bool) (*YMPlayer, error) {
 		return nil, fmt.Errorf("failed to load YM data: %w", err)
 	}
 	player.SetLoopMode(loop)
-	info := player.GetInfo()
-	totalSamples := int64(info.MusicTimeInMs) * int64(sampleRate) / 1000
 	return &YMPlayer{
-		player:       player,
-		sampleRate:   sampleRate,
-		buffer:       make([]int16, 4096),
-		totalSamples: totalSamples,
-		loop:         loop,
-		volume:       1.0,
+		player: player,
+		buffer: make([]int16, 4096),
+		loop:   loop,
 	}, nil
 }
 
 func (y *YMPlayer) Read(p []byte) (n int, err error) {
 	y.mutex.Lock()
 	defer y.mutex.Unlock()
-	samplesNeeded := len(p) / 4
-	outBuffer := make([]int16, samplesNeeded*2)
+
+	if y.player == nil {
+		return 0, io.EOF
+	}
+	if len(p) > 0 && len(p) < pcmFrameBytes {
+		return 0, io.ErrShortBuffer
+	}
+
+	samplesNeeded := len(p) / pcmFrameBytes
 	processed := 0
 	for processed < samplesNeeded {
 		chunkSize := samplesNeeded - processed
@@ -96,31 +92,23 @@ func (y *YMPlayer) Read(p []byte) (n int, err error) {
 		}
 		if !y.player.Compute(y.buffer[:chunkSize], chunkSize) {
 			if !y.loop {
-				for i := processed * 2; i < len(outBuffer); i++ {
-					outBuffer[i] = 0
-				}
 				err = io.EOF
-				break
 			}
 		}
 		for i := 0; i < chunkSize; i++ {
-			sample := int16(float64(y.buffer[i]) * y.volume)
-			outBuffer[(processed+i)*2] = sample
-			outBuffer[(processed+i)*2+1] = sample
+			sample := y.buffer[i]
+			byteOffset := (processed + i) * pcmFrameBytes
+			p[byteOffset] = byte(sample)
+			p[byteOffset+1] = byte(sample >> 8)
+			p[byteOffset+2] = byte(sample)
+			p[byteOffset+3] = byte(sample >> 8)
 		}
 		processed += chunkSize
-		y.position += int64(chunkSize)
+		if err == io.EOF {
+			break
+		}
 	}
-	buf := make([]byte, 0, len(outBuffer)*2)
-	for _, sample := range outBuffer {
-		buf = append(buf, byte(sample), byte(sample>>8))
-	}
-	copy(p, buf)
-	n = len(buf)
-	if n > len(p) {
-		n = len(p)
-	}
-	return n, err
+	return processed * pcmFrameBytes, err
 }
 
 func (y *YMPlayer) Close() error {
@@ -134,42 +122,52 @@ func (y *YMPlayer) Close() error {
 }
 
 type Game struct {
-	fontImg          *ebiten.Image
-	colorImage       *ebiten.Image
-	audioContext     *audio.Context
-	audioPlayer      *audio.Player
-	ymPlayer         *YMPlayer
-	vertices         [][]Vector3
-	currentVertices  []Vector3
-	triangles        []Triangle
-	transformedVerts []Vector3
-	trianglesDepth   []TriangleWithDepth
-	stars            []Star
-	frame            int
-	rotationX        float64
-	rotationY        float64
-	rotationZ        float64
-	morphTimer       float64
-	currentShape     int
-	targetShape      int
-	scrollText       string
-	scrollPos        float64
-	scrollXData      []float64
-	scrollOffset     float64
-	drawOp           *ebiten.DrawImageOptions
-	drawTriOp        *ebiten.DrawTrianglesOptions
+	fontImg            *ebiten.Image
+	colorImage         *ebiten.Image
+	audioContext       *audio.Context
+	audioPlayer        *audio.Player
+	ymPlayer           *YMPlayer
+	vertices           [][]Vector3
+	currentVertices    []Vector3
+	triangles          []Triangle
+	transformedVerts   []Vector3
+	trianglesDepth     []TriangleWithDepth
+	stars              []Star
+	frame              int
+	rotationX          float64
+	rotationY          float64
+	rotationZ          float64
+	morphTimer         float64
+	currentShape       int
+	targetShape        int
+	scrollText         string
+	scrollPos          float64
+	scrollXData        []float64
+	scrollOffset       float64
+	drawTriOp          *ebiten.DrawTrianglesOptions
+	audioInitAttempted bool
+	sceneImage         *ebiten.Image
+	scrollWorkBuffer   *ebiten.Image
+	scrollDeformBuffer *ebiten.Image
+	projectedVerts     []projectedVertex
+	triangleVertices   [3]ebiten.Vertex
+	triangleIndices    []uint16
+}
+
+type projectedVertex struct {
+	X, Y float32
 }
 
 func NewGame() (*Game, error) {
 	g := &Game{
-		drawOp:     &ebiten.DrawImageOptions{},
-		drawTriOp:  &ebiten.DrawTrianglesOptions{},
-		scrollText: "                HELLO, BLAH BLAH BLAH, ABCDEF GHIJKL MNOPQ RSTVU WXYZ. 01234 56789     ON ZAPPE....        ",
+		drawTriOp:          &ebiten.DrawTrianglesOptions{},
+		scrollText:         "                HELLO, BLAH BLAH BLAH, ABCDEF GHIJKL MNOPQ RSTVU WXYZ. 01234 56789     ON ZAPPE....        ",
+		sceneImage:         ebiten.NewImage(screenWidth, screenHeight),
+		scrollWorkBuffer:   ebiten.NewImage(screenWidth+512, 50),
+		scrollDeformBuffer: ebiten.NewImage(screenWidth, 50),
+		triangleIndices:    []uint16{0, 1, 2},
 	}
 
-	if err := g.initAudio(); err != nil {
-		return nil, fmt.Errorf("failed to initialize audio: %w", err)
-	}
 	if err := g.loadImages(); err != nil {
 		return nil, fmt.Errorf("failed to load images: %w", err)
 	}
@@ -200,10 +198,10 @@ func (g *Game) initAudio() error {
 }
 
 func (g *Game) loadImages() error {
-	var err error
-
 	img, _, err := image.Decode(bytes.NewReader(fontData))
-	if err != nil { return fmt.Errorf("failed to load TCB font: %w", err) }
+	if err != nil {
+		return fmt.Errorf("failed to load TCB font: %w", err)
+	}
 	g.fontImg = ebiten.NewImageFromImage(img)
 
 	return nil
@@ -236,20 +234,21 @@ func (g *Game) init3DGeometry() {
 	g.currentVertices = make([]Vector3, 14)
 	copy(g.currentVertices, g.vertices[0]) // Start with state 0
 	g.transformedVerts = make([]Vector3, 14)
+	g.projectedVerts = make([]projectedVertex, 14)
 
 	greenColor := color.RGBA{R: 0x00, G: 0xaa, B: 0x00, A: 0x80} // 50% transparent (0.5 * 255 = 128 = 0x80)
 	grayColor := color.RGBA{R: 0xdd, G: 0xdd, B: 0xdd, A: 0xe6}  // 90% opaque (0.9 * 255 = 230 = 0xe6)
 
 	g.triangles = []Triangle{
-		{0, 2, 1, greenColor, 1.0}, {0, 3, 2, grayColor, 1.0}, {0, 4, 3, greenColor, 1.0}, {0, 1, 4, grayColor, 1.0},
-		{5, 6, 2, grayColor, 1.0}, {5, 7, 6, greenColor, 1.0}, {5, 3, 7, grayColor, 1.0}, {5, 2, 3, greenColor, 1.0},
-		{8, 1, 9, grayColor, 1.0}, {8, 9, 10, greenColor, 1.0}, {8, 10, 4, grayColor, 1.0}, {8, 4, 1, greenColor, 1.0},
-		{11, 6, 7, grayColor, 1.0}, {11, 7, 10, greenColor, 1.0}, {11, 10, 9, grayColor, 1.0}, {11, 9, 6, greenColor, 1.0},
-		{12, 1, 2, grayColor, 1.0}, {12, 2, 6, greenColor, 1.0}, {12, 6, 9, grayColor, 1.0}, {12, 9, 1, greenColor, 1.0},
-		{13, 7, 3, greenColor, 1.0}, {13, 10, 7, grayColor, 1.0}, {13, 4, 10, greenColor, 1.0}, {13, 3, 4, grayColor, 1.0},
+		{0, 2, 1, greenColor}, {0, 3, 2, grayColor}, {0, 4, 3, greenColor}, {0, 1, 4, grayColor},
+		{5, 6, 2, grayColor}, {5, 7, 6, greenColor}, {5, 3, 7, grayColor}, {5, 2, 3, greenColor},
+		{8, 1, 9, grayColor}, {8, 9, 10, greenColor}, {8, 10, 4, grayColor}, {8, 4, 1, greenColor},
+		{11, 6, 7, grayColor}, {11, 7, 10, greenColor}, {11, 10, 9, grayColor}, {11, 9, 6, greenColor},
+		{12, 1, 2, grayColor}, {12, 2, 6, greenColor}, {12, 6, 9, grayColor}, {12, 9, 1, greenColor},
+		{13, 7, 3, greenColor}, {13, 10, 7, grayColor}, {13, 4, 10, greenColor}, {13, 3, 4, grayColor},
 	}
 	g.trianglesDepth = make([]TriangleWithDepth, len(g.triangles))
-	g.currentShape = 0  // Start with simple state 0
+	g.currentShape = 0 // Start with simple state 0
 	g.targetShape = 1
 }
 
@@ -268,8 +267,8 @@ func (g *Game) initStarfield() {
 	for _, param := range starParams {
 		for i := 0; i < param.count; i++ {
 			star := Star{
-				X:     math.Mod(float64(i*73+int(param.speed)*137) * 1.234 / 1000.0 * float64(screenWidth), float64(screenWidth)),
-				Y:     math.Mod(float64(i*97+int(param.speed)*211) * 2.345 / 1000.0 * 280, 280), // Stars only in upper part
+				X:     math.Mod(float64(i*73+int(param.speed)*137)*1.234/1000.0*float64(screenWidth), float64(screenWidth)),
+				Y:     math.Mod(float64(i*97+int(param.speed)*211)*2.345/1000.0*280, 280), // Stars only in upper part
 				Speed: param.speed,
 				Color: param.color,
 				Size:  param.size,
@@ -280,6 +279,15 @@ func (g *Game) initStarfield() {
 }
 
 func (g *Game) Update() error {
+	// On Android, NewGame runs while the native library is loading. Opening the
+	// audio device here ensures that the Activity and EbitenView already exist.
+	if !g.audioInitAttempted {
+		g.audioInitAttempted = true
+		if err := g.initAudio(); err != nil {
+			log.Printf("audio disabled: %v", err)
+		}
+	}
+
 	g.frame++
 	g.rotationX += 0.01
 	g.rotationY += 0.02
@@ -299,7 +307,7 @@ func (g *Game) Update() error {
 	} else {
 		t = 1.0
 	}
-	for i := 0; i < 14; i++ {
+	for i := range g.currentVertices {
 		current := g.vertices[g.currentShape][i]
 		target := g.vertices[g.targetShape][i]
 		g.currentVertices[i] = Vector3{
@@ -355,10 +363,10 @@ func (g *Game) updateStarfield() {
 	for i := range g.stars {
 		// Move stars from left to right
 		g.stars[i].X += g.stars[i].Speed
-		
+
 		// Reset star when it goes off the right side
 		if g.stars[i].X > float64(screenWidth) {
-			g.stars[i].X = 0
+			g.stars[i].X -= float64(screenWidth)
 			g.stars[i].Y = math.Mod(float64(i*97+g.frame), 280)
 		}
 	}
@@ -367,29 +375,20 @@ func (g *Game) updateStarfield() {
 func (g *Game) drawStarfieldWithMask(screen *ebiten.Image) {
 	centerX := screenWidth / 2
 	centerY := screenHeight / 2
-	
+
 	for _, star := range g.stars {
-		x := int(star.X)
-		y := int(star.Y)
-		
-		// Skip stars outside screen bounds
-		if x < 0 || x >= screenWidth || y < 0 || y >= screenHeight {
-			continue
-		}
-		
+		x, y := int(star.X), int(star.Y)
+
 		// Skip stars in the center area where 3D objects appear (roughly 400x300 pixels centered)
 		if x >= centerX-200 && x <= centerX+200 && y >= centerY-150 && y <= centerY+150 {
 			continue
 		}
-		
-		// Draw star as filled rectangle
-		for dy := 0; dy < int(star.Size); dy++ {
-			for dx := 0; dx < int(star.Size); dx++ {
-				if x+dx < screenWidth && y+dy < screenHeight {
-					screen.Set(x+dx, y+dy, star.Color)
-				}
-			}
-		}
+
+		var op ebiten.DrawImageOptions
+		op.GeoM.Scale(star.Size, star.Size)
+		op.GeoM.Translate(star.X, star.Y)
+		op.ColorScale.ScaleWithColor(star.Color)
+		screen.DrawImage(g.colorImage, &op)
 	}
 }
 
@@ -546,10 +545,13 @@ func charToFontIndex(ch rune) (int, bool) {
 }
 
 func (g *Game) drawScrollText(screen *ebiten.Image) {
-	// Create work buffer for TCB-style scroll deformation
-	workBuffer := ebiten.NewImage(screenWidth+512, 50)
-	deformBuffer := ebiten.NewImage(screenWidth, 50)
-	
+	// Reuse both buffers: allocating GPU images in Draw would create avoidable
+	// work and garbage on every frame.
+	workBuffer := g.scrollWorkBuffer
+	deformBuffer := g.scrollDeformBuffer
+	workBuffer.Clear()
+	deformBuffer.Clear()
+
 	// Draw text to work buffer
 	x := g.scrollPos
 	for _, ch := range g.scrollText {
@@ -572,14 +574,14 @@ func (g *Game) drawScrollText(screen *ebiten.Image) {
 		sy := row * 50 // char height
 
 		if x > -64 && x < float64(workBuffer.Bounds().Dx()) {
-			op := &ebiten.DrawImageOptions{}
+			var op ebiten.DrawImageOptions
 			op.GeoM.Translate(x, 0)
 
 			subImg := g.fontImg.SubImage(
 				image.Rect(sx, sy, sx+64, sy+50),
 			).(*ebiten.Image)
 
-			workBuffer.DrawImage(subImg, op)
+			workBuffer.DrawImage(subImg, &op)
 		}
 
 		x += 64
@@ -600,23 +602,23 @@ func (g *Game) drawScrollText(screen *ebiten.Image) {
 
 		subImg := workBuffer.SubImage(srcRect).(*ebiten.Image)
 
-		dstOp := &ebiten.DrawImageOptions{}
+		var dstOp ebiten.DrawImageOptions
 		dstOp.GeoM.Translate(0, float64(y*2))
-		deformBuffer.DrawImage(subImg, dstOp)
+		deformBuffer.DrawImage(subImg, &dstOp)
 	}
 
 	// Draw deformed scroll with vertical wave
 	for x := 0; x < 40; x++ {
 		yOffset := 35 + math.Cos(g.scrollOffset+float64(x)*0.1)*35
 
-		op := &ebiten.DrawImageOptions{}
+		var op ebiten.DrawImageOptions
 		op.GeoM.Translate(float64(x*16), 380+yOffset)
 
 		subImg := deformBuffer.SubImage(
 			image.Rect(x*16, 0, (x+1)*16, 50),
 		).(*ebiten.Image)
 
-		screen.DrawImage(subImg, op)
+		screen.DrawImage(subImg, &op)
 	}
 }
 
@@ -626,13 +628,14 @@ func (g *Game) draw3DObject(screen *ebiten.Image) {
 	fov := 900.0
 	zPos := 1000.0 // Move object further away to match original wab.com demo
 
-	projectedVerts := make([]struct{ X, Y float32 }, len(g.transformedVerts))
 	for i, v := range g.transformedVerts {
 		z := v.Z + zPos
-		if z <= 0 { z = 1 }
+		if z <= 0 {
+			z = 1
+		}
 		scale := float32(fov / z)
-		projectedVerts[i].X = float32(v.X)*scale + centerX
-		projectedVerts[i].Y = float32(v.Y)*scale + centerY
+		g.projectedVerts[i].X = float32(v.X)*scale + centerX
+		g.projectedVerts[i].Y = float32(v.Y)*scale + centerY
 	}
 
 	// Remove debug for clean output
@@ -640,9 +643,9 @@ func (g *Game) draw3DObject(screen *ebiten.Image) {
 
 	for _, triDepth := range g.trianglesDepth {
 		tri := triDepth.Triangle
-		v0 := projectedVerts[tri.V1]
-		v1 := projectedVerts[tri.V2]
-		v2 := projectedVerts[tri.V3]
+		v0 := g.projectedVerts[tri.V1]
+		v1 := g.projectedVerts[tri.V2]
+		v2 := g.projectedVerts[tri.V3]
 
 		// Enable backface culling with correct orientation
 		if (v1.X-v0.X)*(v2.Y-v0.Y)-(v1.Y-v0.Y)*(v2.X-v0.X) > 0 {
@@ -657,38 +660,44 @@ func (g *Game) draw3DObject(screen *ebiten.Image) {
 		colorB := float32(b) / 65535.0
 		colorA := float32(a) / 65535.0 // Use color's alpha, not separate alpha
 
-		vertices := []ebiten.Vertex{
-			{DstX: v0.X, DstY: v0.Y, SrcX: 0, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA},
-			{DstX: v1.X, DstY: v1.Y, SrcX: 1, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA},
-			{DstX: v2.X, DstY: v2.Y, SrcX: 0, SrcY: 1, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA},
-		}
-		indices := []uint16{0, 1, 2}
-		// Try different blend mode for true transparency  
+		vertices := g.triangleVertices[:]
+		vertices[0] = ebiten.Vertex{DstX: v0.X, DstY: v0.Y, SrcX: 0, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}
+		vertices[1] = ebiten.Vertex{DstX: v1.X, DstY: v1.Y, SrcX: 1, SrcY: 0, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}
+		vertices[2] = ebiten.Vertex{DstX: v2.X, DstY: v2.Y, SrcX: 0, SrcY: 1, ColorR: colorR, ColorG: colorG, ColorB: colorB, ColorA: colorA}
+		// Additive blending gives the translucent green faces their Glenz look.
 		if colorA < 0.9 { // For transparent green faces
 			g.drawTriOp.Blend = ebiten.BlendLighter
 		} else { // For opaque gray faces
 			g.drawTriOp.Blend = ebiten.BlendSourceOver
 		}
 		g.drawTriOp.Filter = ebiten.FilterLinear
-		screen.DrawTriangles(vertices, indices, g.colorImage, g.drawTriOp)
+		screen.DrawTriangles(vertices, g.triangleIndices, g.colorImage, g.drawTriOp)
 	}
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	screen.Fill(color.Black)
-	
+	scene := g.sceneImage
+	scene.Fill(color.Black)
+
 	// Draw starfield first, but skip center area where 3D objects are
-	g.drawStarfieldWithMask(screen)
-	
+	g.drawStarfieldWithMask(scene)
+
 	// Draw 3D objects on top
-	g.draw3DObject(screen)
-	
+	g.draw3DObject(scene)
+
 	// Draw scrolling text
-	g.drawScrollText(screen)
+	g.drawScrollText(scene)
+
+	// Preserve the original 4:3 canvas on wide mobile screens and center it in
+	// the available logical surface instead of stretching the demo.
+	screen.Fill(color.Black)
+	var op ebiten.DrawImageOptions
+	op.GeoM.Translate(float64((screen.Bounds().Dx()-screenWidth)/2), 0)
+	screen.DrawImage(scene, &op)
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
-	return screenWidth, screenHeight
+	return demolayout.LogicalWidth(outsideWidth, outsideHeight), screenHeight
 }
 
 func (g *Game) Cleanup() {
@@ -697,18 +706,5 @@ func (g *Game) Cleanup() {
 	}
 	if g.ymPlayer != nil {
 		g.ymPlayer.Close()
-	}
-}
-
-func main() {
-	ebiten.SetWindowSize(screenWidth, screenHeight)
-	ebiten.SetWindowTitle("DMA 3d Demo (Go/Ebiten/ym-player)")
-	game, err := NewGame()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer game.Cleanup()
-	if err := ebiten.RunGame(game); err != nil {
-		log.Fatal(err)
 	}
 }
