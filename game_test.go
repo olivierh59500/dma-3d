@@ -46,3 +46,46 @@ func TestYMPlayerReadProducesStereoWithoutAllocating(t *testing.T) {
 		t.Fatalf("Read allocations = %v; want 0", allocations)
 	}
 }
+
+func TestCharToFontIndex(t *testing.T) {
+	tests := []struct {
+		char rune
+		want int
+	}{
+		{char: '0', want: 16},
+		{char: '9', want: 25},
+		{char: 'A', want: 33},
+		{char: 'Z', want: 58},
+		{char: '?', want: 31},
+	}
+	for _, tt := range tests {
+		got, found := charToFontIndex(tt.char)
+		if !found || got != tt.want {
+			t.Errorf("charToFontIndex(%q) = %d, %t; want %d, true", tt.char, got, found, tt.want)
+		}
+	}
+	if _, found := charToFontIndex(' '); found {
+		t.Error("charToFontIndex(' ') unexpectedly found a glyph")
+	}
+}
+
+func TestNewQuadBatch(t *testing.T) {
+	vertices, indices := newQuadBatch(2)
+	if len(vertices) != 2*verticesPerQuad {
+		t.Fatalf("vertices length = %d; want %d", len(vertices), 2*verticesPerQuad)
+	}
+	wantIndices := []uint16{0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6}
+	if len(indices) != len(wantIndices) {
+		t.Fatalf("indices length = %d; want %d", len(indices), len(wantIndices))
+	}
+	for i, want := range wantIndices {
+		if indices[i] != want {
+			t.Errorf("indices[%d] = %d; want %d", i, indices[i], want)
+		}
+	}
+	for i, vertex := range vertices {
+		if vertex.ColorR != 1 || vertex.ColorG != 1 || vertex.ColorB != 1 || vertex.ColorA != 1 {
+			t.Errorf("vertex %d color = (%v, %v, %v, %v); want opaque white", i, vertex.ColorR, vertex.ColorG, vertex.ColorB, vertex.ColorA)
+		}
+	}
+}

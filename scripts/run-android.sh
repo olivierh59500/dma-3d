@@ -55,9 +55,12 @@ go run github.com/hajimehoshi/ebiten/v2/cmd/ebitenmobile@v2.9.11 \
     ./mobile
 
 echo "→ Compilation de l’APK de débogage"
-"$project_root/android/gradlew" -p "$project_root/android" --console=plain assembleDebug
-
 apk_path="$project_root/android/app/build/outputs/apk/debug/app-debug.apk"
+# AGP can append a replaced native library to an existing debug APK and leave
+# the old ZIP payload unreachable. Removing only this generated output keeps
+# incremental tasks fast while ensuring a stable APK size.
+rm -f "$apk_path"
+"$project_root/android/gradlew" -p "$project_root/android" --console=plain assembleDebug
 
 echo "→ Installation sur le Pixel"
 $adb_path install -r "$apk_path"
