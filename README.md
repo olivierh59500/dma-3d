@@ -1,6 +1,8 @@
 # DMA 3D
 
-Démo Glenz vectors écrite en Go avec Ebitengine et `ym-player`.
+Démo Glenz vectors écrite en Go avec Ebitengine et `ym-player`. Le flux YM est
+synthétisé directement en PCM stéréo 16 bits à 48 kHz, sans allocation pendant
+les lectures audio.
 
 ## Version ordinateur
 
@@ -19,8 +21,9 @@ Avec un unique appareil Android autorisé et connecté en USB :
 Le script génère l’AAR Ebitengine pour `arm64-v8a`, construit l’APK de
 débogage, l’installe puis lance `com.olivierh.dma3d/.MainActivity`.
 
-Le guide détaillé de configuration et de diagnostic se trouve dans
-[`GUIDE_ANDROID_EBITENGINE_PIXEL.md`](GUIDE_ANDROID_EBITENGINE_PIXEL.md).
+Les détails de la mise à jour du synthétiseur et du passage à 48 kHz se
+trouvent dans
+[`GUIDE_MIGRATION_YM_PLAYER_48KHZ.md`](GUIDE_MIGRATION_YM_PLAYER_48KHZ.md).
 
 ## Vérifications Go
 

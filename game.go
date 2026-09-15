@@ -24,7 +24,7 @@ import (
 const (
 	screenWidth   = demolayout.SceneWidth
 	screenHeight  = demolayout.SceneHeight
-	sampleRate    = 44100
+	sampleRate    = 48000
 	pcmFrameBytes = 4 // 16-bit little-endian stereo
 )
 
@@ -92,7 +92,9 @@ func (y *YMPlayer) Read(p []byte) (n int, err error) {
 		}
 		if !y.player.Compute(y.buffer[:chunkSize], chunkSize) {
 			if !y.loop {
+				clear(p[processed*pcmFrameBytes : samplesNeeded*pcmFrameBytes])
 				err = io.EOF
+				break
 			}
 		}
 		for i := 0; i < chunkSize; i++ {
@@ -104,11 +106,8 @@ func (y *YMPlayer) Read(p []byte) (n int, err error) {
 			p[byteOffset+3] = byte(sample >> 8)
 		}
 		processed += chunkSize
-		if err == io.EOF {
-			break
-		}
 	}
-	return processed * pcmFrameBytes, err
+	return samplesNeeded * pcmFrameBytes, err
 }
 
 func (y *YMPlayer) Close() error {
@@ -189,7 +188,10 @@ func (g *Game) initAudio() error {
 	}
 	g.audioPlayer, err = g.audioContext.NewPlayer(g.ymPlayer)
 	if err != nil {
-		g.ymPlayer.Close()
+		if closeErr := g.ymPlayer.Close(); closeErr != nil {
+			log.Printf("close YM player after audio initialization failure: %v", closeErr)
+		}
+		g.ymPlayer = nil
 		return err
 	}
 	g.audioPlayer.SetVolume(0.7)
@@ -702,9 +704,13 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 
 func (g *Game) Cleanup() {
 	if g.audioPlayer != nil {
-		g.audioPlayer.Close()
+		if err := g.audioPlayer.Close(); err != nil {
+			log.Printf("close audio player: %v", err)
+		}
 	}
 	if g.ymPlayer != nil {
-		g.ymPlayer.Close()
+		if err := g.ymPlayer.Close(); err != nil {
+			log.Printf("close YM player: %v", err)
+		}
 	}
 }
