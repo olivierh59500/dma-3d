@@ -6,6 +6,8 @@ import (
 	"cmp"
 	_ "embed"
 	"fmt"
+	"github.com/olivierh59500/democonstructionkit/composite"
+	"github.com/olivierh59500/democonstructionkit/scrolling"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -135,6 +137,8 @@ func (y *YMPlayer) Close() error {
 }
 
 type Game struct {
+	scrollRenderer     *scrolling.Scrolling
+	stripBatch         *composite.QuadBatch
 	fontImg            *ebiten.Image
 	colorImage         *ebiten.Image
 	audioContext       *audio.Context
@@ -589,67 +593,45 @@ func charToFontIndex(ch rune) (int, bool) {
 }
 
 func (g *Game) drawScrollText(screen *ebiten.Image) {
-	workBuffer := g.scrollWorkBuffer
-	deformBuffer := g.scrollDeformBuffer
+	workBuffer, deformBuffer := g.scrollWorkBuffer, g.scrollDeformBuffer
 	workBuffer.Clear()
 	deformBuffer.Clear()
-
-	// Only visit glyphs that can intersect the work buffer. Glyph indices and
-	// source sub-images are prepared once during initialization.
-	firstGlyph := int(math.Floor((-float64(glyphWidth)-g.scrollPos)/glyphWidth)) + 1
-	if firstGlyph < 0 {
-		firstGlyph = 0
-	}
-	lastGlyph := int(math.Ceil((float64(workBuffer.Bounds().Dx()) - g.scrollPos) / glyphWidth))
-	if lastGlyph > len(g.scrollGlyphs) {
-		lastGlyph = len(g.scrollGlyphs)
-	}
-	for index := firstGlyph; index < lastGlyph; index++ {
-		glyphIndex := g.scrollGlyphs[index]
-		if glyphIndex < 0 {
-			continue
+	if g.scrollRenderer == nil {
+		images := make([]*ebiten.Image, len(g.scrollGlyphs))
+		for i, index := range g.scrollGlyphs {
+			if index >= 0 {
+				images[i] = g.fontGlyphs[index]
+			}
 		}
-
-		var op ebiten.DrawImageOptions
-		op.GeoM.Translate(g.scrollPos+float64(index*glyphWidth), 0)
-		workBuffer.DrawImage(g.fontGlyphs[glyphIndex], &op)
+		var err error
+		g.scrollRenderer, err = scrolling.FromImages(images, glyphWidth)
+		if err != nil {
+			panic(err)
+		}
+		g.stripBatch = composite.NewQuadBatch(max(scrollLineCount, scrollColumnCount))
+		g.stripBatch.AlternateDiagonal = true
 	}
-
-	// Deform all horizontal lines in one batch.
+	first := max(0, int(math.Floor((-float64(glyphWidth)-g.scrollPos)/glyphWidth))+1)
+	last := min(len(g.scrollGlyphs), int(math.Ceil((float64(workBuffer.Bounds().Dx())-g.scrollPos)/glyphWidth)))
+	state := scrolling.IdentityState()
+	state.X = g.scrollPos
+	state.First = first
+	state.End = last
+	g.scrollRenderer.DrawAt(workBuffer, state)
+	g.stripBatch.Begin(deformBuffer, workBuffer)
 	for line := 0; line < scrollLineCount; line++ {
-		srcX0 := float32(int(g.scrollXData[(g.frame+line)%len(g.scrollXData)] + glyphWidth))
-		srcX1 := srcX0 + screenWidth
-		y0 := float32(line * scrollLineHeight)
-		y1 := y0 + scrollLineHeight
-		base := line * verticesPerQuad
-		g.scrollLineVertices[base].DstX, g.scrollLineVertices[base].DstY = 0, y0
-		g.scrollLineVertices[base].SrcX, g.scrollLineVertices[base].SrcY = srcX0, y0
-		g.scrollLineVertices[base+1].DstX, g.scrollLineVertices[base+1].DstY = screenWidth, y0
-		g.scrollLineVertices[base+1].SrcX, g.scrollLineVertices[base+1].SrcY = srcX1, y0
-		g.scrollLineVertices[base+2].DstX, g.scrollLineVertices[base+2].DstY = 0, y1
-		g.scrollLineVertices[base+2].SrcX, g.scrollLineVertices[base+2].SrcY = srcX0, y1
-		g.scrollLineVertices[base+3].DstX, g.scrollLineVertices[base+3].DstY = screenWidth, y1
-		g.scrollLineVertices[base+3].SrcX, g.scrollLineVertices[base+3].SrcY = srcX1, y1
+		x := int(g.scrollXData[(g.frame+line)%len(g.scrollXData)] + glyphWidth)
+		y := line * scrollLineHeight
+		g.stripBatch.Rect(image.Rect(x, y, x+screenWidth, y+scrollLineHeight), 0, float32(y), screenWidth, scrollLineHeight)
 	}
-	deformBuffer.DrawTriangles(g.scrollLineVertices, g.scrollLineIndices, workBuffer, nil)
-
-	// Draw all vertical wave columns in one batch.
-	for column := 0; column < scrollColumnCount; column++ {
-		x0 := float32(column * scrollColumnWidth)
-		x1 := x0 + scrollColumnWidth
-		y0 := float32(380 + 35 + math.Cos(g.scrollOffset+float64(column)*0.1)*35)
-		y1 := y0 + glyphHeight
-		base := column * verticesPerQuad
-		g.scrollColVertices[base].DstX, g.scrollColVertices[base].DstY = x0, y0
-		g.scrollColVertices[base].SrcX, g.scrollColVertices[base].SrcY = x0, 0
-		g.scrollColVertices[base+1].DstX, g.scrollColVertices[base+1].DstY = x1, y0
-		g.scrollColVertices[base+1].SrcX, g.scrollColVertices[base+1].SrcY = x1, 0
-		g.scrollColVertices[base+2].DstX, g.scrollColVertices[base+2].DstY = x0, y1
-		g.scrollColVertices[base+2].SrcX, g.scrollColVertices[base+2].SrcY = x0, glyphHeight
-		g.scrollColVertices[base+3].DstX, g.scrollColVertices[base+3].DstY = x1, y1
-		g.scrollColVertices[base+3].SrcX, g.scrollColVertices[base+3].SrcY = x1, glyphHeight
+	g.stripBatch.Flush()
+	g.stripBatch.Begin(screen, deformBuffer)
+	for col := 0; col < scrollColumnCount; col++ {
+		x := col * scrollColumnWidth
+		y := float32(380 + 35 + math.Cos(g.scrollOffset+float64(col)*.1)*35)
+		g.stripBatch.Rect(image.Rect(x, 0, x+scrollColumnWidth, glyphHeight), float32(x), y, scrollColumnWidth, glyphHeight)
 	}
-	screen.DrawTriangles(g.scrollColVertices, g.scrollColIndices, deformBuffer, nil)
+	g.stripBatch.Flush()
 }
 
 func (g *Game) draw3DObject(screen *ebiten.Image) {
