@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/olivierh59500/democonstructionkit/presets"
 	"github.com/olivierh59500/democonstructionkit/sound"
 )
 
@@ -50,6 +51,10 @@ func TestMusicStreamReadProducesStereoWithoutAllocating(t *testing.T) {
 }
 
 func TestCharToFontIndex(t *testing.T) {
+	lookup, err := presets.TileLookup("dma-3d", true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		char rune
 		want int
@@ -61,33 +66,12 @@ func TestCharToFontIndex(t *testing.T) {
 		{char: '?', want: 31},
 	}
 	for _, tt := range tests {
-		got, found := charToFontIndex(tt.char)
+		got, found := lookup(tt.char)
 		if !found || got != tt.want {
 			t.Errorf("charToFontIndex(%q) = %d, %t; want %d, true", tt.char, got, found, tt.want)
 		}
 	}
-	if _, found := charToFontIndex(' '); found {
-		t.Error("charToFontIndex(' ') unexpectedly found a glyph")
-	}
-}
-
-func TestNewQuadBatch(t *testing.T) {
-	vertices, indices := newQuadBatch(2)
-	if len(vertices) != 2*verticesPerQuad {
-		t.Fatalf("vertices length = %d; want %d", len(vertices), 2*verticesPerQuad)
-	}
-	wantIndices := []uint16{0, 1, 2, 1, 3, 2, 4, 5, 6, 5, 7, 6}
-	if len(indices) != len(wantIndices) {
-		t.Fatalf("indices length = %d; want %d", len(indices), len(wantIndices))
-	}
-	for i, want := range wantIndices {
-		if indices[i] != want {
-			t.Errorf("indices[%d] = %d; want %d", i, indices[i], want)
-		}
-	}
-	for i, vertex := range vertices {
-		if vertex.ColorR != 1 || vertex.ColorG != 1 || vertex.ColorB != 1 || vertex.ColorA != 1 {
-			t.Errorf("vertex %d color = (%v, %v, %v, %v); want opaque white", i, vertex.ColorR, vertex.ColorG, vertex.ColorB, vertex.ColorA)
-		}
+	if _, found := lookup(' '); found {
+		t.Error("lookup(' ') unexpectedly found a glyph")
 	}
 }

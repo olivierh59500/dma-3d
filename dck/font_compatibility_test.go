@@ -1,6 +1,9 @@
 package dma3d
 
-import "testing"
+import (
+	"github.com/olivierh59500/democonstructionkit/presets"
+	"testing"
+)
 
 func legacyAtlasIndex(ch rune) (int, bool) {
 	if ch >= '0' && ch <= '9' {
@@ -39,8 +42,12 @@ func legacyAtlasIndex(ch rune) (int, bool) {
 	}
 }
 func TestSharedAtlasIndicesMatchOriginalAlphabet(t *testing.T) {
+	lookup, err := presets.TileLookup("dma-3d", true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for r := rune(0); r < 256; r++ {
-		got, ok := charToFontIndex(r)
+		got, ok := lookup(r)
 		want, found := legacyAtlasIndex(r)
 		if got != want || ok != found {
 			t.Fatalf("rune %U: got (%d,%t), want (%d,%t)", r, got, ok, want, found)

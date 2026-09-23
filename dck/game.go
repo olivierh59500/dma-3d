@@ -10,7 +10,7 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/olivierh59500/democonstructionkit/composite"
+	kit "github.com/olivierh59500/democonstructionkit"
 	"github.com/olivierh59500/democonstructionkit/scrolling"
 	"github.com/olivierh59500/democonstructionkit/sound"
 
@@ -70,7 +70,7 @@ type Star struct {
 
 type Game struct {
 	scrollRenderer     *scrolling.Scrolling
-	stripBatch         *composite.QuadBatch
+	drawTriOp          *ebiten.DrawTrianglesOptions
 	fontImg            *ebiten.Image
 	colorImage         *ebiten.Image
 	audioContext       *audio.Context
@@ -90,21 +90,8 @@ type Game struct {
 	currentShape       int
 	targetShape        int
 	scrollText         string
-	scrollGlyphs       []int
-	scrollTextWidth    float64
-	scrollPos          float64
-	scrollXData        []float64
-	scrollOffset       float64
-	fontGlyphs         [fontGlyphCount]*ebiten.Image
-	scrollLineVertices []ebiten.Vertex
-	scrollLineIndices  []uint16
-	scrollColVertices  []ebiten.Vertex
-	scrollColIndices   []uint16
-	drawTriOp          *ebiten.DrawTrianglesOptions
 	audioInitAttempted bool
 	sceneImage         *ebiten.Image
-	scrollWorkBuffer   *ebiten.Image
-	scrollDeformBuffer *ebiten.Image
 	projectedVerts     []projectedVertex
 	triangleVertices   [3]ebiten.Vertex
 	triangleIndices    []uint16
@@ -118,12 +105,10 @@ type projectedVertex struct {
 
 func NewGame() (*Game, error) {
 	g := &Game{
-		drawTriOp:          &ebiten.DrawTrianglesOptions{},
-		scrollText:         "                HELLO, BLAH BLAH BLAH, ABCDEF GHIJKL MNOPQ RSTVU WXYZ. 01234 56789     ON ZAPPE....        ",
-		sceneImage:         ebiten.NewImage(screenWidth, screenHeight),
-		scrollWorkBuffer:   ebiten.NewImage(screenWidth+scrollWorkPadding, glyphHeight),
-		scrollDeformBuffer: ebiten.NewImage(screenWidth, glyphHeight),
-		triangleIndices:    []uint16{0, 1, 2},
+		drawTriOp:       &ebiten.DrawTrianglesOptions{},
+		scrollText:      "                HELLO, BLAH BLAH BLAH, ABCDEF GHIJKL MNOPQ RSTVU WXYZ. 01234 56789     ON ZAPPE....        ",
+		sceneImage:      ebiten.NewImage(screenWidth, screenHeight),
+		triangleIndices: []uint16{0, 1, 2},
 	}
 
 	if err := g.loadImages(); err != nil {
@@ -131,10 +116,15 @@ func NewGame() (*Game, error) {
 	}
 	g.init3DGeometry()
 	g.initStarfield()
-	g.initScrollX()
-	g.initScrollText()
-	g.scrollLineVertices, g.scrollLineIndices = newQuadBatch(scrollLineCount)
-	g.scrollColVertices, g.scrollColIndices = newQuadBatch(scrollColumnCount)
+	atlas, err := presets.FontAtlas("dma-3d", g.fontImg)
+	if err != nil {
+		return nil, err
+	}
+	config := presets.DMA3DRowColumn(atlas, g.scrollText)
+	g.scrollRenderer, err = scrolling.New(scrolling.Config{RowColumn: &config})
+	if err != nil {
+		return nil, err
+	}
 	g.colorImage = ebiten.NewImage(1, 1)
 	g.colorImage.Fill(color.RGBA{255, 255, 255, 255}) // White with full alpha
 
@@ -170,11 +160,6 @@ func (g *Game) loadImages() error {
 	if g.fontImg.Bounds().Dx() < 10*glyphWidth || g.fontImg.Bounds().Dy() < 6*glyphHeight {
 		return fmt.Errorf("TCB font dimensions are %s; want at least %dx%d", g.fontImg.Bounds(), 10*glyphWidth, 6*glyphHeight)
 	}
-	glyphs, err := scrolling.GridImages(g.fontImg, image.Pt(glyphWidth, glyphHeight), 10, len(g.fontGlyphs))
-	if err != nil {
-		return err
-	}
-	copy(g.fontGlyphs[:], glyphs)
 
 	return nil
 }
@@ -303,14 +288,9 @@ func (g *Game) Update() error {
 		}
 	}
 
-	// Update TCB-style scroll
-	g.scrollPos -= 4.0
-	if g.scrollPos < -g.scrollTextWidth {
-		g.scrollPos = float64(screenWidth)
-	}
-	g.scrollOffset += 0.1
-	if g.scrollOffset >= fullRotation {
-		g.scrollOffset -= fullRotation
+	// DCK owns the glyph, row-wave and column-cosine transport.
+	if err := g.scrollRenderer.Update(kit.Frame{}); err != nil {
+		return err
 	}
 
 	g.transform3DVertices()
@@ -398,141 +378,6 @@ func (g *Game) drawStarfieldWithMask(screen *ebiten.Image) {
 }
 
 // initScrollX initializes the scroll deformation positions
-func (g *Game) initScrollX() {
-	g.scrollXData = make([]float64, 0, scrollWaveDataSize)
-
-	// First wave pattern
-	stp1 := 7.0 / 180.0 * math.Pi
-	stp2 := 3.0 / 180.0 * math.Pi
-	for i := 0; i < 389; i++ {
-		x := 20*math.Sin(float64(i)*stp1) + 30*math.Cos(float64(i)*stp2)
-		g.scrollXData = append(g.scrollXData, x)
-	}
-
-	// Second wave pattern
-	stp1 = 72.0 / 180.0 * math.Pi
-	for i := 0; i < 120; i++ {
-		x := 4 * math.Sin(float64(i)*stp1)
-		g.scrollXData = append(g.scrollXData, x)
-	}
-
-	// Third wave pattern
-	stp1 = 8.0 / 180.0 * math.Pi
-	for i := 0; i < 68; i++ {
-		x := 40 * math.Sin(float64(i)*stp1)
-		g.scrollXData = append(g.scrollXData, x)
-	}
-
-	// Repeat first pattern
-	stp1 = 7.0 / 180.0 * math.Pi
-	stp2 = 3.0 / 180.0 * math.Pi
-	for i := 0; i < 389; i++ {
-		x := 20*math.Sin(float64(i)*stp1) + 30*math.Cos(float64(i)*stp2)
-		g.scrollXData = append(g.scrollXData, x)
-	}
-
-	// Small wave
-	stp1 = 72.0 / 180.0 * math.Pi
-	for i := 0; i < 36; i++ {
-		x := 4 * math.Sin(float64(i)*stp1)
-		g.scrollXData = append(g.scrollXData, x)
-	}
-
-	// Final wave
-	stp1 = 8.0 / 180.0 * math.Pi
-	for i := 0; i < 189; i++ {
-		x := 30 * math.Sin(float64(i)*stp1)
-		g.scrollXData = append(g.scrollXData, x)
-	}
-}
-
-func (g *Game) initScrollText() {
-	g.scrollGlyphs = make([]int, 0, len(g.scrollText))
-	for _, ch := range g.scrollText {
-		index, found := charToFontIndex(ch)
-		if !found {
-			index = -1
-		}
-		g.scrollGlyphs = append(g.scrollGlyphs, index)
-	}
-	g.scrollTextWidth = float64(len(g.scrollGlyphs) * glyphWidth)
-}
-
-func newQuadBatch(quadCount int) ([]ebiten.Vertex, []uint16) {
-	vertices := make([]ebiten.Vertex, quadCount*verticesPerQuad)
-	indices := make([]uint16, quadCount*indicesPerQuad)
-	for quad := 0; quad < quadCount; quad++ {
-		vertexBase := quad * verticesPerQuad
-		for i := 0; i < verticesPerQuad; i++ {
-			vertices[vertexBase+i].ColorR = 1
-			vertices[vertexBase+i].ColorG = 1
-			vertices[vertexBase+i].ColorB = 1
-			vertices[vertexBase+i].ColorA = 1
-		}
-
-		indexBase := quad * indicesPerQuad
-		base := uint16(vertexBase)
-		indices[indexBase] = base
-		indices[indexBase+1] = base + 1
-		indices[indexBase+2] = base + 2
-		indices[indexBase+3] = base + 1
-		indices[indexBase+4] = base + 3
-		indices[indexBase+5] = base + 2
-	}
-	return vertices, indices
-}
-
-// charToFontIndex converts a character to its position in the font bitmap
-var charToFontIndex = func() func(rune) (int, bool) {
-	lookup, err := presets.TileLookup("dma-3d", true)
-	if err != nil {
-		panic(err)
-	}
-	return lookup
-}()
-
-func (g *Game) drawScrollText(screen *ebiten.Image) {
-	workBuffer, deformBuffer := g.scrollWorkBuffer, g.scrollDeformBuffer
-	workBuffer.Clear()
-	deformBuffer.Clear()
-	if g.scrollRenderer == nil {
-		images := make([]*ebiten.Image, len(g.scrollGlyphs))
-		for i, index := range g.scrollGlyphs {
-			if index >= 0 {
-				images[i] = g.fontGlyphs[index]
-			}
-		}
-		var err error
-		g.scrollRenderer, err = scrolling.FromImages(images, glyphWidth)
-		if err != nil {
-			panic(err)
-		}
-		g.stripBatch = composite.NewQuadBatch(max(scrollLineCount, scrollColumnCount))
-		g.stripBatch.AlternateDiagonal = true
-	}
-	first := max(0, int(math.Floor((-float64(glyphWidth)-g.scrollPos)/glyphWidth))+1)
-	last := min(len(g.scrollGlyphs), int(math.Ceil((float64(workBuffer.Bounds().Dx())-g.scrollPos)/glyphWidth)))
-	state := scrolling.IdentityState()
-	state.X = g.scrollPos
-	state.First = first
-	state.End = last
-	g.scrollRenderer.DrawAt(workBuffer, state)
-	g.stripBatch.Begin(deformBuffer, workBuffer)
-	for line := 0; line < scrollLineCount; line++ {
-		x := int(g.scrollXData[(g.frame+line)%len(g.scrollXData)] + glyphWidth)
-		y := line * scrollLineHeight
-		g.stripBatch.Rect(image.Rect(x, y, x+screenWidth, y+scrollLineHeight), 0, float32(y), screenWidth, scrollLineHeight)
-	}
-	g.stripBatch.Flush()
-	g.stripBatch.Begin(screen, deformBuffer)
-	for col := 0; col < scrollColumnCount; col++ {
-		x := col * scrollColumnWidth
-		y := float32(380 + 35 + math.Cos(g.scrollOffset+float64(col)*.1)*35)
-		g.stripBatch.Rect(image.Rect(x, 0, x+scrollColumnWidth, glyphHeight), float32(x), y, scrollColumnWidth, glyphHeight)
-	}
-	g.stripBatch.Flush()
-}
-
 func (g *Game) draw3DObject(screen *ebiten.Image) {
 	centerX := float32(screenWidth / 2)
 	centerY := float32(screenHeight / 2)
@@ -596,7 +441,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.draw3DObject(scene)
 
 	// Draw scrolling text
-	g.drawScrollText(scene)
+	g.scrollRenderer.Draw(scene)
 
 	// Preserve the original 4:3 canvas on wide mobile screens and center it in
 	// the available logical surface instead of stretching the demo.
@@ -613,6 +458,9 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func (g *Game) Cleanup() {
+	if g.scrollRenderer != nil {
+		g.scrollRenderer.Close()
+	}
 	if g.audioPlayer != nil {
 		if err := g.audioPlayer.Close(); err != nil {
 			log.Printf("close audio player: %v", err)
