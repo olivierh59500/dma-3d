@@ -6,6 +6,7 @@ import (
 	"cmp"
 	originalassets "dma-3d"
 	"fmt"
+	"github.com/olivierh59500/democonstructionkit/presets"
 	"image"
 	"image/color"
 
@@ -169,15 +170,11 @@ func (g *Game) loadImages() error {
 	if g.fontImg.Bounds().Dx() < 10*glyphWidth || g.fontImg.Bounds().Dy() < 6*glyphHeight {
 		return fmt.Errorf("TCB font dimensions are %s; want at least %dx%d", g.fontImg.Bounds(), 10*glyphWidth, 6*glyphHeight)
 	}
-	for index := range g.fontGlyphs {
-		row, col := index/10, index%10
-		g.fontGlyphs[index] = g.fontImg.SubImage(image.Rect(
-			col*glyphWidth,
-			row*glyphHeight,
-			(col+1)*glyphWidth,
-			(row+1)*glyphHeight,
-		)).(*ebiten.Image)
+	glyphs, err := scrolling.GridImages(g.fontImg, image.Pt(glyphWidth, glyphHeight), 10, len(g.fontGlyphs))
+	if err != nil {
+		return err
 	}
+	copy(g.fontGlyphs[:], glyphs)
 
 	return nil
 }
@@ -486,42 +483,13 @@ func newQuadBatch(quadCount int) ([]ebiten.Vertex, []uint16) {
 }
 
 // charToFontIndex converts a character to its position in the font bitmap
-func charToFontIndex(ch rune) (int, bool) {
-	if ch >= '0' && ch <= '9' {
-		return 16 + int(ch-'0'), true
+var charToFontIndex = func() func(rune) (int, bool) {
+	lookup, err := presets.TileLookup("dma-3d", true)
+	if err != nil {
+		panic(err)
 	}
-	if ch >= 'A' && ch <= 'Z' {
-		return 33 + int(ch-'A'), true
-	}
-
-	// Font layout (6 rows of 10 characters)
-	switch ch {
-	case '!':
-		return 1, true
-	case '"':
-		return 2, true
-	case '\'':
-		return 7, true
-	case '(':
-		return 8, true
-	case ')':
-		return 9, true
-	case ',':
-		return 12, true
-	case '-':
-		return 13, true
-	case '.':
-		return 14, true
-	case ':':
-		return 27, true
-	case ';':
-		return 28, true
-	case '?':
-		return 31, true
-	default:
-		return 0, false
-	}
-}
+	return lookup
+}()
 
 func (g *Game) drawScrollText(screen *ebiten.Image) {
 	workBuffer, deformBuffer := g.scrollWorkBuffer, g.scrollDeformBuffer
