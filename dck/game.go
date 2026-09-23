@@ -1,27 +1,26 @@
 // Package dma3d implements the Glenz vector demo.
 package dma3d
 
-import originalassets "dma-3d"
-
 import (
 	"bytes"
 	"cmp"
-
+	originalassets "dma-3d"
 	"fmt"
-	"github.com/olivierh59500/democonstructionkit/composite"
-	"github.com/olivierh59500/democonstructionkit/scrolling"
 	"image"
 	"image/color"
+
+	"github.com/olivierh59500/democonstructionkit/composite"
+	"github.com/olivierh59500/democonstructionkit/scrolling"
+	"github.com/olivierh59500/democonstructionkit/sound"
+
 	_ "image/png"
-	"io"
 	"log"
 	"math"
 	"slices"
-	"sync"
 
 	"github.com/hajimehoshi/ebiten/v2"
+
 	audio "github.com/olivierh59500/democonstructionkit/sound/output"
-	"github.com/olivierh59500/ym-player/pkg/stsound"
 
 	demolayout "dma-3d/dck/internal/layout"
 )
@@ -68,75 +67,6 @@ type Star struct {
 	Size  float64
 }
 
-type YMPlayer struct {
-	player *stsound.StSound
-	buffer []int16
-	mutex  sync.Mutex
-	loop   bool
-}
-
-func NewYMPlayer(data []byte, sampleRate int, loop bool) (*YMPlayer, error) {
-	player := stsound.CreateWithRate(sampleRate)
-	if err := player.LoadMemory(data); err != nil {
-		player.Destroy()
-		return nil, fmt.Errorf("failed to load YM data: %w", err)
-	}
-	player.SetLoopMode(loop)
-	return &YMPlayer{
-		player: player,
-		buffer: make([]int16, 4096),
-		loop:   loop,
-	}, nil
-}
-
-func (y *YMPlayer) Read(p []byte) (n int, err error) {
-	y.mutex.Lock()
-	defer y.mutex.Unlock()
-
-	if y.player == nil {
-		return 0, io.EOF
-	}
-	if len(p) > 0 && len(p) < pcmFrameBytes {
-		return 0, io.ErrShortBuffer
-	}
-
-	samplesNeeded := len(p) / pcmFrameBytes
-	processed := 0
-	for processed < samplesNeeded {
-		chunkSize := samplesNeeded - processed
-		if chunkSize > len(y.buffer) {
-			chunkSize = len(y.buffer)
-		}
-		if !y.player.Compute(y.buffer[:chunkSize], chunkSize) {
-			if !y.loop {
-				clear(p[processed*pcmFrameBytes : samplesNeeded*pcmFrameBytes])
-				err = io.EOF
-				break
-			}
-		}
-		for i := 0; i < chunkSize; i++ {
-			sample := y.buffer[i]
-			byteOffset := (processed + i) * pcmFrameBytes
-			p[byteOffset] = byte(sample)
-			p[byteOffset+1] = byte(sample >> 8)
-			p[byteOffset+2] = byte(sample)
-			p[byteOffset+3] = byte(sample >> 8)
-		}
-		processed += chunkSize
-	}
-	return samplesNeeded * pcmFrameBytes, err
-}
-
-func (y *YMPlayer) Close() error {
-	y.mutex.Lock()
-	defer y.mutex.Unlock()
-	if y.player != nil {
-		y.player.Destroy()
-		y.player = nil
-	}
-	return nil
-}
-
 type Game struct {
 	scrollRenderer     *scrolling.Scrolling
 	stripBatch         *composite.QuadBatch
@@ -144,7 +74,7 @@ type Game struct {
 	colorImage         *ebiten.Image
 	audioContext       *audio.Context
 	audioPlayer        *audio.Player
-	ymPlayer           *YMPlayer
+	musicStream        *sound.Stream
 	vertices           [][]Vector3
 	currentVertices    []Vector3
 	triangles          []Triangle
@@ -213,16 +143,16 @@ func NewGame() (*Game, error) {
 func (g *Game) initAudio() error {
 	g.audioContext = audio.NewContext(sampleRate)
 	var err error
-	g.ymPlayer, err = NewYMPlayer(musicData, sampleRate, true)
+	g.musicStream, err = sound.Open("music.ym", musicData, sound.Options{SampleRate: sampleRate, Loop: true, PCMFormat: sound.PCM16, Gain: 1})
 	if err != nil {
 		return err
 	}
-	g.audioPlayer, err = g.audioContext.NewPlayer(g.ymPlayer)
+	g.audioPlayer, err = g.audioContext.NewPlayer(g.musicStream)
 	if err != nil {
-		if closeErr := g.ymPlayer.Close(); closeErr != nil {
-			log.Printf("close YM player after audio initialization failure: %v", closeErr)
+		if closeErr := g.musicStream.Close(); closeErr != nil {
+			log.Printf("close music stream after audio initialization failure: %v", closeErr)
 		}
-		g.ymPlayer = nil
+		g.musicStream = nil
 		return err
 	}
 	g.audioPlayer.SetVolume(0.7)
@@ -720,9 +650,9 @@ func (g *Game) Cleanup() {
 			log.Printf("close audio player: %v", err)
 		}
 	}
-	if g.ymPlayer != nil {
-		if err := g.ymPlayer.Close(); err != nil {
-			log.Printf("close YM player: %v", err)
+	if g.musicStream != nil {
+		if err := g.musicStream.Close(); err != nil {
+			log.Printf("close music stream: %v", err)
 		}
 	}
 }

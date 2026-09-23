@@ -10,7 +10,7 @@ import (
 
 func main() {
 	ebiten.SetWindowSize(640, 480)
-	ebiten.SetWindowTitle("DMA 3D Demo (Go/Ebitengine/ym-player)")
+	ebiten.SetWindowTitle("DMA 3D Demo (Go/Ebitengine/DCK)")
 	ebiten.SetScreenClearedEveryFrame(false)
 
 	game, err := dma3d.NewGame()
