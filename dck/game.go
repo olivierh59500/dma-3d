@@ -13,6 +13,7 @@ import (
 	kit "github.com/olivierh59500/democonstructionkit"
 	"github.com/olivierh59500/democonstructionkit/scrolling"
 	"github.com/olivierh59500/democonstructionkit/sound"
+	"github.com/olivierh59500/democonstructionkit/sprites"
 
 	_ "image/png"
 	"log"
@@ -41,8 +42,6 @@ const (
 	scrollColumnWidth  = 16
 	scrollColumnCount  = screenWidth / scrollColumnWidth
 	scrollWaveDataSize = 1191
-	verticesPerQuad    = 4
-	indicesPerQuad     = 6
 	fullRotation       = 2 * math.Pi
 )
 
@@ -61,15 +60,9 @@ type TriangleWithDepth struct {
 	Triangle
 	Depth float64
 }
-type Star struct {
-	X, Y  float64
-	Speed float64
-	Color color.RGBA
-	Size  float64
-}
-
 type Game struct {
 	scrollRenderer     *scrolling.Scrolling
+	starfield          *sprites.BatchedSolidField
 	drawTriOp          *ebiten.DrawTrianglesOptions
 	fontImg            *ebiten.Image
 	colorImage         *ebiten.Image
@@ -81,8 +74,6 @@ type Game struct {
 	triangles          []Triangle
 	transformedVerts   []Vector3
 	trianglesDepth     []TriangleWithDepth
-	stars              []Star
-	frame              int
 	rotationX          float64
 	rotationY          float64
 	rotationZ          float64
@@ -95,8 +86,6 @@ type Game struct {
 	projectedVerts     []projectedVertex
 	triangleVertices   [3]ebiten.Vertex
 	triangleIndices    []uint16
-	starVertices       []ebiten.Vertex
-	starIndices        []uint16
 }
 
 type projectedVertex struct {
@@ -115,7 +104,6 @@ func NewGame() (*Game, error) {
 		return nil, fmt.Errorf("failed to load images: %w", err)
 	}
 	g.init3DGeometry()
-	g.initStarfield()
 	atlas, err := presets.FontAtlas("dma-3d", g.fontImg)
 	if err != nil {
 		return nil, err
@@ -127,6 +115,16 @@ func NewGame() (*Game, error) {
 	}
 	g.colorImage = ebiten.NewImage(1, 1)
 	g.colorImage.Fill(color.RGBA{255, 255, 255, 255}) // White with full alpha
+	starOptions := presets.DefaultDMA3DStarOptions(screenWidth, screenHeight)
+	starOptions.Source = g.colorImage
+	starConfig, err := presets.DMA3DStarfield(starOptions)
+	if err != nil {
+		return nil, err
+	}
+	g.starfield, err = sprites.NewBatchedSolidField(starConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	return g, nil
 }
@@ -209,39 +207,6 @@ func (g *Game) init3DGeometry() {
 	g.targetShape = 1
 }
 
-func (g *Game) initStarfield() {
-	starParams := []struct {
-		count int
-		speed float64
-		color color.RGBA
-		size  float64
-	}{
-		{35, 11.2, color.RGBA{0xE0, 0xA0, 0xA0, 0xFF}, 2},
-		{35, 5.6, color.RGBA{0xC0, 0x60, 0x60, 0xFF}, 2},
-		{35, 2.8, color.RGBA{0x80, 0x40, 0x40, 0xFF}, 2},
-	}
-	starCount := 0
-	for _, param := range starParams {
-		starCount += param.count
-	}
-	g.stars = make([]Star, 0, starCount)
-
-	for _, param := range starParams {
-		for i := 0; i < param.count; i++ {
-			star := Star{
-				X:     math.Mod(float64(i*73+int(param.speed)*137)*1.234/1000.0*float64(screenWidth), float64(screenWidth)),
-				Y:     math.Mod(float64(i*97+int(param.speed)*211)*2.345/1000.0*280, 280), // Stars only in upper part
-				Speed: param.speed,
-				Color: param.color,
-				Size:  param.size,
-			}
-			g.stars = append(g.stars, star)
-		}
-	}
-	g.starVertices = make([]ebiten.Vertex, 0, len(g.stars)*verticesPerQuad)
-	g.starIndices = make([]uint16, 0, len(g.stars)*indicesPerQuad)
-}
-
 func (g *Game) Update() error {
 	// On Android, NewGame runs while the native library is loading. Opening the
 	// audio device here ensures that the Activity and EbitenView already exist.
@@ -252,7 +217,6 @@ func (g *Game) Update() error {
 		}
 	}
 
-	g.frame++
 	g.rotationX += 0.01
 	g.rotationY += 0.02
 	g.rotationZ += 0.04
@@ -294,8 +258,7 @@ func (g *Game) Update() error {
 	}
 
 	g.transform3DVertices()
-	g.updateStarfield()
-	return nil
+	return g.starfield.Update(kit.Frame{})
 }
 
 func (g *Game) transform3DVertices() {
@@ -325,56 +288,6 @@ func (g *Game) transform3DVertices() {
 	slices.SortFunc(g.trianglesDepth, func(a, b TriangleWithDepth) int {
 		return cmp.Compare(a.Depth, b.Depth)
 	})
-}
-
-func (g *Game) updateStarfield() {
-	for i := range g.stars {
-		// Move stars from left to right
-		g.stars[i].X += g.stars[i].Speed
-
-		// Reset star when it goes off the right side
-		if g.stars[i].X > float64(screenWidth) {
-			g.stars[i].X -= float64(screenWidth)
-			g.stars[i].Y = math.Mod(float64(i*97+g.frame), 280)
-		}
-	}
-}
-
-func (g *Game) drawStarfieldWithMask(screen *ebiten.Image) {
-	centerX := screenWidth / 2
-	centerY := screenHeight / 2
-	vertices := g.starVertices[:0]
-	indices := g.starIndices[:0]
-
-	for _, star := range g.stars {
-		x, y := int(star.X), int(star.Y)
-
-		// Skip stars in the center area where 3D objects appear (roughly 400x300 pixels centered)
-		if x >= centerX-200 && x <= centerX+200 && y >= centerY-150 && y <= centerY+150 {
-			continue
-		}
-
-		base := uint16(len(vertices))
-		x0, y0 := float32(star.X), float32(star.Y)
-		x1, y1 := x0+float32(star.Size), y0+float32(star.Size)
-		r := float32(star.Color.R) / 0xff
-		green := float32(star.Color.G) / 0xff
-		b := float32(star.Color.B) / 0xff
-		a := float32(star.Color.A) / 0xff
-		vertices = append(vertices,
-			ebiten.Vertex{DstX: x0, DstY: y0, ColorR: r, ColorG: green, ColorB: b, ColorA: a},
-			ebiten.Vertex{DstX: x1, DstY: y0, ColorR: r, ColorG: green, ColorB: b, ColorA: a},
-			ebiten.Vertex{DstX: x0, DstY: y1, ColorR: r, ColorG: green, ColorB: b, ColorA: a},
-			ebiten.Vertex{DstX: x1, DstY: y1, ColorR: r, ColorG: green, ColorB: b, ColorA: a},
-		)
-		indices = append(indices, base, base+1, base+2, base+1, base+3, base+2)
-	}
-
-	g.starVertices = vertices
-	g.starIndices = indices
-	if len(indices) > 0 {
-		screen.DrawTriangles(vertices, indices, g.colorImage, nil)
-	}
 }
 
 // initScrollX initializes the scroll deformation positions
@@ -435,7 +348,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	scene.Fill(color.Black)
 
 	// Draw starfield first, but skip center area where 3D objects are
-	g.drawStarfieldWithMask(scene)
+	g.starfield.Draw(scene)
 
 	// Draw 3D objects on top
 	g.draw3DObject(scene)
@@ -458,6 +371,9 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func (g *Game) Cleanup() {
+	if g.starfield != nil {
+		g.starfield.Close()
+	}
 	if g.scrollRenderer != nil {
 		g.scrollRenderer.Close()
 	}
