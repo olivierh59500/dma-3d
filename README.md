@@ -4,6 +4,25 @@ Démo Glenz vectors écrite en Go avec Ebitengine et `ym-player`. Le flux YM est
 synthétisé directement en PCM stéréo 16 bits à 48 kHz, sans allocation pendant
 les lectures audio.
 
+<!-- Project showcase -->
+## Screenshots
+
+[![A rotating green-and-white polyhedron above the curved scroller and starfield](docs/media/screenshot-1.png)](docs/media/screenshot-1.png)
+
+A rotating green-and-white polyhedron above the curved scroller and starfield.
+
+## Video
+
+[![Animated preview of DMA 3D](docs/media/preview.gif)](https://github.com/olivierh59500/dma-3d/raw/refs/heads/main/docs/media/preview.mp4)
+
+**[Watch or download the 24-second MP4 preview with sound](https://github.com/olivierh59500/dma-3d/raw/refs/heads/main/docs/media/preview.mp4)**
+
+This preview is captured from the Go production.
+
+The animated image is silent; the MP4 includes the soundtrack.
+
+<!-- End project showcase -->
+
 ## Version ordinateur
 
 ```sh
