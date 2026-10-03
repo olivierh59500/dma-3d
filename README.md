@@ -7,9 +7,17 @@ les lectures audio.
 <!-- Project showcase -->
 ## Screenshots
 
-[![A rotating green-and-white polyhedron above the curved scroller and starfield](docs/media/screenshot-1.png)](docs/media/screenshot-1.png)
+[![Cube form surrounded by stars and scrolling text](docs/media/screenshot-1.png)](docs/media/screenshot-1.png)
 
-A rotating green-and-white polyhedron above the curved scroller and starfield.
+Cube form surrounded by stars and scrolling text.
+
+[![Expanded faceted form](docs/media/screenshot-2.png)](docs/media/screenshot-2.png)
+
+Expanded faceted form.
+
+[![Flattened diamond form](docs/media/screenshot-3.png)](docs/media/screenshot-3.png)
+
+Flattened diamond form.
 
 ## Video
 
